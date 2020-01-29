@@ -80,7 +80,7 @@ impl Utm{
     /// assert_eq!(utm.band, 'T');
     /// assert!((utm.easting - 252363.38).abs() < 1e-2);
     /// assert!((utm.northing - 4654101.89).abs() < 1e-2);
-    pub fn from_coord_with_zone(coord: Coord, zone: &'static str) -> Self {
+    pub fn from_coord_with_zone(coord: Coord, zone: &str) -> Self {
         let lat = coord.lat;
         let lon = coord.lon;
 
