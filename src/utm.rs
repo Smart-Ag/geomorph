@@ -52,6 +52,153 @@ impl From<Mgrs> for Utm {
     }
 }
 
+
+const VALID_BANDS: [char; 20] = ['C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 
+                                 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X'];
+impl Utm{
+    /// Helper function for converting Latitude/Longitude to UTM using a specified zone.
+    /// This can be used to perform UTM conversion with sub-optimal zone specifiers
+    /// 
+    /// Example:
+    /// 
+    /// ```rust
+    /// 
+    /// use geomorph::coord::Coord;
+    /// use geomorph::utm::Utm;
+    /// 
+    /// let lat: f64 = 42.00;
+    /// let lon: f64 = -89.99;
+    /// let coord = Coord::new(lat, lon);
+    /// let utm = Utm::from_coord_with_zone(coord, "15T");
+    /// assert_eq!(utm.zone, 15);
+    /// assert_eq!(utm.band, 'T');
+    /// assert!((utm.easting - 749293.21).abs() < 1e-2);
+    /// assert!((utm.northing - 4654159.98).abs() < 1e-2);
+    /// 
+    /// let utm = Utm::from_coord_with_zone(coord, "16T");
+    /// assert_eq!(utm.zone, 16);
+    /// assert_eq!(utm.band, 'T');
+    /// assert!((utm.easting - 252363.38).abs() < 1e-2);
+    /// assert!((utm.northing - 4654101.89).abs() < 1e-2);
+    pub fn from_coord_with_zone(coord: Coord, zone: &'static str) -> Self {
+        let lat = coord.lat;
+        let lon = coord.lon;
+
+        assert!(zone.len() < 4 && zone.len() > 1, "Invalid zone specified");
+        let mut zone = String::from(zone);
+
+        let band = zone.pop().unwrap();
+        assert!(VALID_BANDS.contains(&band), "Invalid band specified in zone string");
+        
+        let mut zone = zone.parse::<i32>().expect("Error parsing zone number from zone string");
+        let datum = Datum::wgs84();
+
+        let easting: f64;
+        let northing: f64;
+        let north: bool;
+        let ups: bool;
+
+        north = lat >= 0.0;
+        ups = lat < -80.0 || lat >= 84.0;
+
+        if !ups {
+            let lon_0: f64 = 6.0 * (zone as f64) - 183.0;
+            let mut lon_norm: f64 = math::angle_diff(lon_0, lon);
+
+            let mut latsign: f64;
+            if lat < 0.0 {
+                latsign = -1.0
+            } else {
+                latsign = 1.0
+            }
+            let lonsign: f64;
+            if lon_norm < 0.0 {
+                lonsign = -1.0
+            } else {
+                lonsign = 1.0
+            }
+
+            let lat_norm: f64 = lat * latsign;
+            lon_norm = lon_norm * lonsign;
+
+            let backside: bool = lon_norm > 90.0;
+
+            if backside {
+                if lat_norm == 0.0 {
+                    latsign = -1.0;
+                }
+                lon_norm = 180.0 - lon_norm;
+            }
+
+            let rlat: f64 = lat_norm.to_radians();
+            let rlon: f64 = lon_norm.to_radians();
+
+            let (sphi, cphi) = rlat.sin_cos();
+            let (slam, clam) = rlon.sin_cos();
+
+            let etap: f64;
+            let xip: f64;
+            if lat_norm != 90.0 {
+                let tau: f64 = sphi / cphi;
+                let taup: f64 = math::taupf(tau, datum.es);
+
+                xip = taup.atan2(clam);
+                etap = (slam / taup.hypot(clam)).asinh();
+            } else {
+                xip = consts::PI / 2.0;
+                etap = 0.0;
+            }
+
+            let c0: f64 = (2.0 * xip).cos();
+            let ch0: f64 = (2.0 * etap).cosh();
+            let s0: f64 = (2.0 * xip).sin();
+            let sh0: f64 = (2.0 * etap).sinh();
+
+            let mut a: Complex64 = Complex::new(2.0 * c0 * ch0, -2.0 * s0 * sh0);
+
+            let mut n = datum.maxpow;
+            let mut y0: Complex64 = Complex::new(0.0, 0.0);
+            let mut y1: Complex64 = Complex::new(0.0, 0.0);
+            let mut z0: Complex64 = Complex::new(0.0, 0.0);
+            let mut z1: Complex64 = Complex::new(0.0, 0.0);
+
+            while n > 0 {
+                y1 = (a * y0) - (y1) + (datum.alp[n]);
+                z1 = (a * z0) - (z1) + (2.0 * (n as f64) * datum.alp[n]);
+                n = n - 1;
+                y0 = (a * y1) - (y0) + (datum.alp[n]);
+                z0 = (a * z1) - (z0) + (2.0 * (n as f64) * datum.alp[n]);
+                n = n - 1;
+            }
+
+            a = Complex::new(s0 * ch0, c0 * sh0);
+            y1 = Complex::new(xip, etap) + a * y0;
+
+            let xi: f64 = y1.re;
+            let eta: f64 = y1.im;
+
+            let ind: usize = if ups { 0 } else { 2 } + if north { 1 } else { 0 };
+
+            northing =
+                datum.a1 * datum.k0 * (if backside { consts::PI - xi } else { xi }) * latsign
+                    + datum.false_northing[ind];
+            easting = datum.a1 * datum.k0 * eta * lonsign + datum.false_easting[ind];
+        } else {
+            easting = 0.0;
+            northing = 0.0;
+            zone = 0;
+        }
+
+        Utm {
+            easting,
+            northing,
+            north,
+            zone,
+            band,
+            ups,
+        }
+    }
+}
 impl From<Coord> for Utm {
     fn from(coord: Coord) -> Self {
         let lat = coord.lat;
